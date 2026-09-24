@@ -1,0 +1,24 @@
+{
+  "schema_name": "subtitle-review-protected-phrases",
+  "schema_version": "1.0.0",
+  "config_version": "1.0.0",
+  "defaults": {
+    "allow_split_when_overlong": true
+  },
+  "rules": [
+    {
+      "rule_id": "protected.product.open_caption",
+      "text": "Open Caption",
+      "keep_together": true,
+      "enabled": true,
+      "note": "Example product name used by the public template."
+    },
+    {
+      "rule_id": "protected.organization.acme_studio",
+      "text": "Acme Studio",
+      "keep_together": true,
+      "enabled": true,
+      "note": "Example organization name used by the public template."
+    }
+  ]
+}

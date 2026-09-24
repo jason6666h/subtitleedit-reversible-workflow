@@ -1,0 +1,1 @@
+{"segmentation_plan": {"events": [{"compatibility": {"flat_event_row": {"start": 0.0, "end": 1.2, "prediction": "Open Caption", "asr_quality": {"anomaly_codes": ["low_text_density"], "metrics": {"characters_per_second": 0.5, "duration_seconds": 1.2}}, "asr_selection": {"second_pass_status": "recommended_not_run", "review_reasons": []}, "asr_observations": []}}}]}}

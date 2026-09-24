@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "name": "Subtitle Edit Reversible Workflow",
+  "kind": "source-integration",
+  "version": "0.1.0",
+  "officialBaselineTag": "v5.2.0",
+  "officialBaselineCommit": "d8e3b8b41e856a896c541ce7e59b490a99c21196",
+  "ownedSourceRoots": [
+    "integration/ReversibleAudioSync",
+    "integration/SubtitleReview",
+    "tests/UI",
+    "src/AudioWorkflow.Core",
+    "src/SubtitleReview.Core"
+  ],
+  "runtimeHostPatchFiles": [
+    "src/ui/Controls/AudioVisualizerControl/AudioVisualizer.cs",
+    "src/ui/Features/Main/Layout/InitWaveform.cs",
+    "src/ui/Features/Main/Layout/InitToolbar.cs",
+    "src/ui/Features/Main/MainViewModel.cs",
+    "src/ui/Features/Shared/Undocked/VideoPlayerUndockedViewModel.cs",
+    "src/ui/Logic/VideoPlayers/LibMpvDynamic/LibMpvDynamicPlayer.cs",
+    "src/ui/Logic/UndoRedo/IUndoRedoManager.cs",
+    "src/ui/Logic/UndoRedo/UndoRedoItem.cs",
+    "src/ui/Logic/UndoRedo/UndoRedoManager.cs",
+    "src/ui/Program.cs",
+    "src/ui/UI.csproj"
+  ],
+  "testHookFiles": [
+    "tests/UI/UITests.csproj"
+  ],
+  "generatedPatch": "integration/host-hooks.patch",
+  "runtimePayloadNotes": [
+    "FFmpeg and libmpv are not redistributed by this repository."
+  ],
+  "neverCommit": [
+    "user media",
+    "subtitle work files",
+    "AudioWork revisions",
+    "AI review sessions",
+    "API keys or tokens",
+    "portable binaries"
+  ]
+}

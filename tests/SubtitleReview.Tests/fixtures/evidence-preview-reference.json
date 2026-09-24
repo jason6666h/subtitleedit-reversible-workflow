@@ -1,0 +1,119 @@
+{
+  "rows": [
+    {
+      "review_id": "1",
+      "source_name": "Subtitle Edit",
+      "source_path": "",
+      "source_line": "1",
+      "segment": "1",
+      "start": "00:00:00,000",
+      "end": "00:00:01,200",
+      "template_reference_text": "",
+      "original_text": "Open Caption",
+      "ai_review_text": "Open Caption",
+      "ai_review_applied": "0",
+      "final_text": "Open Caption",
+      "timing_audit": "",
+      "timing_authority": "",
+      "template_cue_number": "",
+      "transfer_method": "",
+      "transfer_confidence": "",
+      "source_event_id": "",
+      "split_index": 0,
+      "split_count": 0,
+      "split_method": "",
+      "split_confidence": "",
+      "split_confidence_score": 0.0,
+      "audio_shift_ms": 0,
+      "character_count": 0,
+      "cps": 0.0,
+      "split_review_required": false,
+      "split_fallback_reason": "",
+      "split_audit": "",
+      "downstream_risk_score": "",
+      "downstream_risk_priority": "",
+      "downstream_risk_flags": "",
+      "asr_evidence": {
+        "schema_version": 1,
+        "available": true,
+        "policy": "evidence_only_never_auto_replace",
+        "primary": {
+          "text": "Open Caption",
+          "selected_pass": null,
+          "confidence": null,
+          "anomaly_codes": [
+            "low_text_density"
+          ],
+          "observed_anomaly_codes": [
+            "low_text_density"
+          ]
+        },
+        "alternatives": [],
+        "audio": {
+          "duration_seconds": 1.2,
+          "characters_per_second": 0.5
+        },
+        "second_pass": {
+          "status": "recommended_not_run",
+          "selection_reason": "",
+          "confidence_tier": "",
+          "review_reasons": []
+        },
+        "glossary_evidence": [],
+        "risk": {
+          "score": 100,
+          "priority": "critical",
+          "flag_codes": [
+            "likely_deletion",
+            "second_pass_pending"
+          ],
+          "flags": [
+            {
+              "code": "likely_deletion",
+              "severity": "high",
+              "weight": 70,
+              "detail": "density=0.500 chars/s"
+            },
+            {
+              "code": "second_pass_pending",
+              "severity": "medium",
+              "weight": 60,
+              "detail": ""
+            }
+          ]
+        }
+      },
+      "note": "",
+      "preview_action": "keep",
+      "review_state": "reviewed",
+      "response_conflict": false,
+      "response_variants": [],
+      "timing_review_required": false,
+      "timing_is_interpolated": false,
+      "timing_review_reasons": [],
+      "timing_methods": [],
+      "timing_direct_character_count": 0,
+      "timing_interpolated_character_count": 0,
+      "timing_wildcard_character_count": 0,
+      "timing_confidence_status": "",
+      "timing_fallback": null,
+      "split_required": false,
+      "split_fallback_used": false,
+      "split_text_preservation_verified": false,
+      "split_outer_frame_preserved": false,
+      "long_subtitle_splitter_version": "",
+      "evidence_status": "matched"
+    }
+  ],
+  "glossary_candidates": [],
+  "unknown": 0,
+  "total": 1,
+  "parsed": 1,
+  "documents": 1,
+  "duplicate_ids": [],
+  "conflicts": {},
+  "missing_ids": [],
+  "unknown_ids": [],
+  "complete": true,
+  "timing_policy": "standard"
+}

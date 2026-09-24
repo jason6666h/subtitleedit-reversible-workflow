@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install FFmpeg for audio regression tests
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Prepare Subtitle Edit 5.2.0
+        shell: pwsh
+        run: ./scripts/setup-upstream.ps1
+
+      - name: Run regression tests
+        shell: pwsh
+        run: ./scripts/test.ps1

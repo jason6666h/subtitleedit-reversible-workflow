@@ -1,0 +1,34 @@
+{
+  "results": {
+    "1": "Open Caption",
+    "2": "Acme Studio!",
+    "3": "Open Caption enabled.",
+    "99": "Do not apply"
+  },
+  "documents": 1,
+  "duplicate_ids": [
+    2
+  ],
+  "conflicts": {
+    "2": [
+      "Acme Studio.",
+      "Acme Studio!"
+    ]
+  },
+  "missing_ids": [
+    4
+  ],
+  "unknown_ids": [
+    99
+  ],
+  "glossary_candidates": [
+    {
+      "source": "Open Captin",
+      "target": "Open Caption",
+      "category": "product",
+      "evidence_ids": "3",
+      "confidence": "高",
+      "note": "verified manually"
+    }
+  ]
+}

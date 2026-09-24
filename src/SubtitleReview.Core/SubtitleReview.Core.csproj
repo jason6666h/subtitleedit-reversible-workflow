@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><TreatWarningsAsErrors>true</TreatWarningsAsErrors></PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="PromptTemplate.zh-TW.md" WithCulture="false" LogicalName="SubtitleReview.Core.PromptTemplate.zh-TW.md" />
+    <EmbeddedResource Include="PromptTemplate.en.md" WithCulture="false" LogicalName="SubtitleReview.Core.PromptTemplate.en.md" />
+    <EmbeddedResource Include="Resources\glossary.csv" />
+    <EmbeddedResource Include="Resources\glossary_ai.csv" />
+    <EmbeddedResource Include="Resources\protected_phrases.json" />
+  </ItemGroup>
+</Project>

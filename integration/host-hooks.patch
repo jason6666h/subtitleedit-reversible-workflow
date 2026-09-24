@@ -1,0 +1,1449 @@
+diff --git a/src/ui/Controls/AudioVisualizerControl/AudioVisualizer.cs b/src/ui/Controls/AudioVisualizerControl/AudioVisualizer.cs
+index d47a0ce244721c2672c4557e75ed395ec8d7f3c0..9aa5f624c2eb3bfb58a4feb301bc7543dcbe91ef 100644
+--- a/src/ui/Controls/AudioVisualizerControl/AudioVisualizer.cs
++++ b/src/ui/Controls/AudioVisualizerControl/AudioVisualizer.cs
+@@ -1,4 +1,4 @@
+-﻿using Avalonia;
++using Avalonia;
+ using Avalonia.Controls;
+ using Avalonia.Input;
+ using Avalonia.Media;
+@@ -435,6 +435,42 @@ public class AudioVisualizer : Control
+     private long _lastMouseWheelScroll = -1;
+     private readonly Lock _lock = new();
+     public SubtitleLineViewModel? NewSelectionParagraph { get; set; }
++    // Audio ranges are not new subtitles: never expose them to insert/paste commands.
++    public SubtitleLineViewModel? AudioRangeSelection { get; set; }
++    private bool _isAudioRangeSelectionMode;
++    private IPointer? _audioRangePointer;
++    private static readonly IBrush AudioRangeBrush = new ImmutableSolidColorBrush(Color.FromArgb(72, 0, 168, 255));
++    private static readonly Pen AudioRangePen = new(Brushes.DeepSkyBlue, 2);
++    public bool IsAudioRangeSelectionMode
++    {
++        get => _isAudioRangeSelectionMode;
++        set
++        {
++            if (_isAudioRangeSelectionMode == value) return;
++            _isAudioRangeSelectionMode = value;
++            _interactionMode = InteractionMode.None;
++            _activeParagraph = null;
++            _pointerDragActive = false;
++            _audioRangePointer?.Capture(null);
++            _audioRangePointer = null;
++            NewSelectionParagraph = null;
++            AudioRangeSelection = null;
++            Cursor = new Cursor(value ? StandardCursorType.Cross : StandardCursorType.Arrow);
++            InvalidateVisual();
++        }
++    }
++
++    private double AudioRangeSecondsAt(double x) => Math.Clamp(RelativeXPositionToSeconds(x),
++        0, Math.Max(0, WavePeaks?.LengthInSeconds ?? 0));
++
++    private void UpdateAudioRange(double x)
++    {
++        var seconds = AudioRangeSecondsAt(x);
++        AudioRangeSelection?.SetTimes(
++            TimeSpanExtensions.FromSecondsWholeMilliseconds(Math.Min(_newSelectionSeconds, seconds)),
++            TimeSpanExtensions.FromSecondsWholeMilliseconds(Math.Max(_newSelectionSeconds, seconds)));
++        InvalidateVisual();
++    }
+     public double _newSelectionSeconds { get; set; }
+     private SubtitleLineViewModel? _activeParagraph;
+     private SubtitleLineViewModel? _activeParagraphPrevious;
+@@ -632,6 +668,7 @@ public class AudioVisualizer : Control
+         Tapped += OnTapped;
+         DoubleTapped += (sender, e) =>
+         {
++            if (IsAudioRangeSelectionMode) { e.Handled = true; return; }
+             if (OnPrimaryDoubleClicked != null && e.Pointer.IsPrimary)
+             {
+                 var point = e.GetPosition(this);
+@@ -655,6 +692,12 @@ public class AudioVisualizer : Control
+ 
+     private void OnKeyDown(object? sender, KeyEventArgs e)
+     {
++        if (IsAudioRangeSelectionMode && e.Key is Key.Enter or Key.Delete)
++        {
++            // Neither insert a subtitle nor run ordinary subtitle deletion on an audio range.
++            e.Handled = true;
++            return;
++        }
+         _isCtrlDown = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+         _isShiftDown = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+         _isAltDown = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+@@ -662,6 +705,9 @@ public class AudioVisualizer : Control
+ 
+         if (e.Key == Key.Escape)
+         {
++            AudioRangeSelection = null;
++            _audioRangePointer?.Capture(null);
++            _audioRangePointer = null;
+             _interactionMode = InteractionMode.None;
+             _pointerDragActive = false;
+             NewSelectionParagraph = null;
+@@ -707,6 +753,7 @@ public class AudioVisualizer : Control
+ 
+     private void OnTapped(object? sender, TappedEventArgs e)
+     {
++        if (IsAudioRangeSelectionMode) { e.Handled = true; return; }
+         _isCtrlDown = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+         _isShiftDown = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+         _isAltDown = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+@@ -960,6 +1007,23 @@ public class AudioVisualizer : Control
+ 
+     private void OnPointerReleased(object? sender, PointerReleasedEventArgs e)
+     {
++        if (IsAudioRangeSelectionMode && e.InitialPressMouseButton == MouseButton.Left)
++        {
++            if (_pointerDragActive) UpdateAudioRange(e.GetPosition(this).X);
++            if (AudioRangeSelection is { Duration.TotalMilliseconds: < 10 }) AudioRangeSelection = null;
++            _pointerDragActive = false;
++            _interactionMode = InteractionMode.None;
++            _activeParagraph = null;
++            _preventNextTap = true;
++            _audioRangePointer?.Capture(null);
++            _audioRangePointer = null;
++            e.Handled = true;
++            InvalidateVisual();
++            return;
++        }
++        // Cleared up front: every path out of this method ends the drag, and several of them
++        // return early. The 500 ms tail in IsEditingWithPointer takes over from here, so the
++        // settled times still get one - and only one - undo snapshot.
+         var wasDragging = _pointerDragActive;
+         _pointerDragActive = false;
+         if (wasDragging)
+@@ -972,7 +1036,7 @@ public class AudioVisualizer : Control
+         _isAltDown = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+         _isMetaDown = e.KeyModifiers.HasFlag(KeyModifiers.Meta);
+ 
+-        var nsp = NewSelectionParagraph;
++        var nsp = IsAudioRangeSelectionMode ? AudioRangeSelection : NewSelectionParagraph;
+         if (nsp is { Duration.TotalMilliseconds: <= 1 })
+         {
+             nsp = null;
+@@ -980,7 +1044,7 @@ public class AudioVisualizer : Control
+ 
+         var pos = e.GetPosition(this);
+ 
+-        if (nsp == null && e.InitialPressMouseButton == MouseButton.Right && Se.Settings.Waveform.RightClickSelectsSubtitle)
++        if (!IsAudioRangeSelectionMode && nsp == null && e.InitialPressMouseButton == MouseButton.Right && Se.Settings.Waveform.RightClickSelectsSubtitle)
+         {
+             var p = HitTestParagraph(pos);
+ 
+@@ -1158,6 +1222,25 @@ public class AudioVisualizer : Control
+             return;
+         }
+ 
++        if (IsAudioRangeSelectionMode)
++        {
++            // Bypass subtitle hit testing, edge resizing and neighbour overlap constraints.
++            // Right click preserves the range for the synchronous-cut context menu.
++            if (WavePeaks != null && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
++            {
++                Focus();
++                _newSelectionSeconds = AudioRangeSecondsAt(point.X);
++                AudioRangeSelection = new SubtitleLineViewModel();
++                UpdateAudioRange(point.X);
++                _activeParagraph = null;
++                _interactionMode = InteractionMode.New;
++                _pointerDragActive = true;
++                _audioRangePointer = e.Pointer;
++                e.Pointer.Capture(this);
++            }
++            return;
++        }
++
+         if (IsReadOnly)
+         {
+             InvalidateVisual();
+@@ -1317,6 +1400,13 @@ public class AudioVisualizer : Control
+         {
+             OnDragEnded?.Invoke(this, EventArgs.Empty);
+         }
++
++        if (IsAudioRangeSelectionMode)
++        {
++            _interactionMode = InteractionMode.None;
++            _activeParagraph = null;
++            _audioRangePointer = null;
++        }
+     }
+ 
+     private void OnPointerExited(object? sender, PointerEventArgs e)
+@@ -1352,6 +1442,19 @@ public class AudioVisualizer : Control
+ 
+     private void OnPointerMoved(object? sender, PointerEventArgs e)
+     {
++        if (IsAudioRangeSelectionMode)
++        {
++            if (_pointerDragActive && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
++                UpdateAudioRange(e.GetPosition(this).X);
++            else if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
++            {
++                _pointerDragActive = false;
++                _interactionMode = InteractionMode.None;
++            }
++            Cursor = new Cursor(StandardCursorType.Cross);
++            return;
++        }
++
+         if (IsReadOnly)
+         {
+             return;
+@@ -3856,39 +3959,46 @@ public class AudioVisualizer : Control
+ 
+     private void DrawCurrentVideoPosition(DrawingContext context, ref RenderContext renderCtx)
+     {
+-        if (renderCtx.CurrentVideoPositionSeconds <= 0)
++        if (renderCtx.CurrentVideoPositionSeconds < 0 || renderCtx.Width < 1)
+         {
+             return;
+         }
+ 
+         var currentPositionPos = SecondsToXPositionOptimized(renderCtx.CurrentVideoPositionSeconds - renderCtx.StartPositionSeconds, renderCtx.SampleRate, renderCtx.ZoomFactor);
+-        if (currentPositionPos > 0 && currentPositionPos < renderCtx.Width)
++        if (currentPositionPos >= 0 && currentPositionPos <= renderCtx.Width)
+         {
+             var isOnShotChange = GetShotChangeIndex(renderCtx.CurrentVideoPositionSeconds) >= 0;
+             var pen = isOnShotChange ? _paintPenCursorOnShotChange : _paintPenCursor;
++            // A line centred exactly on the clip boundary loses half its stroke and can be
++            // discarded by a backend altogether. Keep an edge cursor inside the visible pixel:
++            // playback at 0:00 (or exactly at the scrolled view start/end) must be visible before
++            // the first non-zero player position arrives.
++            var visiblePosition = Math.Clamp((double)currentPositionPos, 0.5, renderCtx.Width - 0.5);
+             context.DrawLine(pen,
+-                new Point(currentPositionPos, 0),
+-                new Point(currentPositionPos, renderCtx.Height));
++                new Point(visiblePosition, 0),
++                new Point(visiblePosition, renderCtx.Height));
+         }
+     }
+ 
+     private void DrawNewParagraph(DrawingContext context, ref RenderContext renderCtx)
+     {
+-        if (NewSelectionParagraph == null)
++        var selection = IsAudioRangeSelectionMode ? AudioRangeSelection : NewSelectionParagraph;
++        if (selection == null)
+         {
+             return;
+         }
+ 
+         double currentRegionLeft =
+-            SecondsToXPositionOptimized(NewSelectionParagraph.StartTime.TotalSeconds - renderCtx.StartPositionSeconds, renderCtx.SampleRate, renderCtx.ZoomFactor);
++            SecondsToXPositionOptimized(selection.StartTime.TotalSeconds - renderCtx.StartPositionSeconds, renderCtx.SampleRate, renderCtx.ZoomFactor);
+         double currentRegionRight =
+-            SecondsToXPositionOptimized(NewSelectionParagraph.EndTime.TotalSeconds - renderCtx.StartPositionSeconds, renderCtx.SampleRate, renderCtx.ZoomFactor);
++            SecondsToXPositionOptimized(selection.EndTime.TotalSeconds - renderCtx.StartPositionSeconds, renderCtx.SampleRate, renderCtx.ZoomFactor);
+         var currentRegionWidth = currentRegionRight - currentRegionLeft;
+ 
+         if (currentRegionRight >= 0 && currentRegionLeft <= renderCtx.Width)
+         {
+             var rect = new Rect(currentRegionLeft, 0, currentRegionWidth, renderCtx.Height);
+-            context.FillRectangle(_paintParagraphBackground, rect);
++            context.FillRectangle(IsAudioRangeSelectionMode ? AudioRangeBrush : _paintParagraphBackground, rect);
++            if (IsAudioRangeSelectionMode) context.DrawRectangle(null, AudioRangePen, rect);
+ 
+             DrawNewParagraphDuration(context, currentRegionLeft, currentRegionWidth, renderCtx.Height);
+         }
+@@ -3898,12 +4008,13 @@ public class AudioVisualizer : Control
+     // rectangle so the length is visible before the subtitle is created (issue #12034).
+     private void DrawNewParagraphDuration(DrawingContext context, double currentRegionLeft, double currentRegionWidth, double height)
+     {
+-        if (NewSelectionParagraph == null || currentRegionWidth <= 5)
++        var selection = IsAudioRangeSelectionMode ? AudioRangeSelection : NewSelectionParagraph;
++        if (selection == null || currentRegionWidth <= 5)
+         {
+             return;
+         }
+ 
+-        var durationMs = (NewSelectionParagraph.EndTime - NewSelectionParagraph.StartTime).TotalMilliseconds;
++        var durationMs = (selection.EndTime - selection.StartTime).TotalMilliseconds;
+         if (durationMs < 10)
+         {
+             return;
+@@ -3911,7 +4022,7 @@ public class AudioVisualizer : Control
+ 
+         // ToShortDisplayString mirrors Se.Settings.General.UseFrameMode, so this label follows the
+         // same time/frame formatting as the existing paragraph footer (see DrawParagraphFooter).
+-        var durationText = GetCachedParagraphText(new TimeCode(durationMs).ToShortDisplayString());
++        var durationText = GetCachedParagraphText((IsAudioRangeSelectionMode ? "音訊 " : "") + new TimeCode(durationMs).ToShortDisplayString());
+         if (durationText.Width >= currentRegionWidth - 4)
+         {
+             return;
+@@ -4828,4 +4939,4 @@ public class AudioVisualizer : Control
+     {
+         //_paintTimeText = UiUtil.GetTextColor();
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/ui/Features/Main/Layout/InitToolbar.cs b/src/ui/Features/Main/Layout/InitToolbar.cs
+index 5294039236ddef5f432e19b83bde8b83661ce412..d3d8d36843a33784507bb1ecc4f372d8cd843500 100644
+--- a/src/ui/Features/Main/Layout/InitToolbar.cs
++++ b/src/ui/Features/Main/Layout/InitToolbar.cs
+@@ -349,6 +349,8 @@ public static class InitToolbar
+             isLastSeparator = false;
+         }
+ 
++        stackPanelLeft.Children.Add(ReversibleAudioSyncUi.CreateToolbarButton(vm));
++        stackPanelLeft.Children.Add(SubtitleReviewIntegrationUi.CreateToolbarButton(vm));
+         // The format specific icons below only appear for ASSA/SSA/WebVTT, and each one can be
+         // hidden from settings just like the icons above. A format only gets its separator when
+         // at least one of its own icons is still enabled.
+diff --git a/src/ui/Features/Main/Layout/InitWaveform.cs b/src/ui/Features/Main/Layout/InitWaveform.cs
+index fa7deeeaaf1bd98baee3b01c6e1dd7c0f7f2af09..32e82ec88135d702d65b489e5c134a2c0b41b26c 100644
+--- a/src/ui/Features/Main/Layout/InitWaveform.cs
++++ b/src/ui/Features/Main/Layout/InitWaveform.cs
+@@ -103,7 +103,6 @@ public class InitWaveform
+         // The waveform is a focusable custom control with no text content, so without an
+         // accessible name screen readers announce it as a bare generic Avalonia control (#12087).
+         AutomationProperties.SetName(vm.AudioVisualizer, Se.Language.General.Waveform);
+-
+         MakeWaveformContextMenu();
+ 
+         void MakeWaveformContextMenu()
+@@ -1054,7 +1053,7 @@ public class InitWaveform
+         vm.AudioVisualizer.AddHandler(DragDrop.DragOverEvent, vm.VideoOnDragOver, RoutingStrategies.Bubble);
+         vm.AudioVisualizer.AddHandler(DragDrop.DropEvent, vm.VideoOnDrop, RoutingStrategies.Bubble);
+ 
+-        return mainGrid;
++        return ReversibleAudioSyncUi.Attach(mainGrid, vm);
+     }
+ 
+     private static SeWaveformToolbarItem GetToolbarSettingFor(SeWaveformToolbarItemType type)
+@@ -1187,4 +1186,4 @@ public class InitWaveform
+ 
+         return WaveformDrawStyle.Classic;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/ui/Features/Main/MainViewModel.cs b/src/ui/Features/Main/MainViewModel.cs
+index ffcf751a0fea25258de945ac8bc1911f3f1f6b51..1bb69f56b56ead6bdd96a3d18291f3f6447b6a7e 100644
+--- a/src/ui/Features/Main/MainViewModel.cs
++++ b/src/ui/Features/Main/MainViewModel.cs
+@@ -1,4 +1,4 @@
+-﻿using Nikse.SubtitleEdit.UiLogic.Export;
++using Nikse.SubtitleEdit.UiLogic.Export;
+ using Avalonia;
+ using Avalonia.Controls;
+ using Avalonia.Controls.ApplicationLifetimes;
+@@ -731,10 +731,13 @@ public partial class MainViewModel :
+     private bool _pauseRequested; // a pause command fired; freeze the cursor now, before mpv's IsPlaying flips
+     private long _playheadPauseSettleTs; // when we last paused; briefly hold the estimate so it doesn't snap back
+     private const double PlayheadPauseSettleMs = 300; // mpv's reported position lags ~100-200 ms after a pause
+-    private bool _playheadPausedSettled; // set once mpv's clock has come to rest after a pause and the cursor has landed on it
+-    private const double PlayheadPausedSettleStableMs = 100; // mpv's position unchanged this long after a pause = its clock is at rest -> snap the cursor there once
++    private bool _playheadPausedSettled; // mpv's clock has come to rest after a pause; audio keeps its frozen cursor
++    private const double PlayheadPausedSettleStableMs = 100; // mpv's position unchanged this long after a pause = its clock is at rest
+     private bool _playheadResyncOnPlay; // armed while paused: re-seed the estimate from mpv once playback actually moves again
+     private const double PlayheadResyncOnPlayThresholdSeconds = 0.04; // ~one frame; below this the standing residual isn't worth moving the cursor for
++    private double? _audioPauseCursorSeconds; // the displayed audio cursor frozen by Pause; also the edit/resume position
++    private string? _playheadSourceFileName;
++    private bool _playheadSourceIsAudioOnly;
+     private long _frameStepFollowUntilTs; // a native frame step is in flight: treat mpv's un-pause as paused (see BeginFrameStepPlayheadFollow)
+     private const double FrameStepFollowWindowMs = 1000; // safety cap; the window normally closes as soon as the step lands
+ 
+@@ -1316,6 +1319,7 @@ public partial class MainViewModel :
+         {
+             _shortcutManager.RegisterShortcut(shortCut);
+         }
++        RegisterPlaybackShortcuts();
+     }
+ 
+     private void ReloadShortcuts()
+@@ -1329,6 +1333,7 @@ public partial class MainViewModel :
+         {
+             _shortcutManager.RegisterShortcut(shortCut);
+         }
++        RegisterPlaybackShortcuts();
+ 
+         UpdateSurroundWithMenuItems();
+         UpdateCustomSearchMenuItems();
+@@ -1429,6 +1434,7 @@ public partial class MainViewModel :
+         {
+             GetVideoPlayerControl()?.SetSpeed(speed);
+         }
++        ApplyReviewAudioBalance();
+     }
+ 
+     /// <summary>
+@@ -1744,9 +1750,13 @@ public partial class MainViewModel :
+     internal void RequestPausePlayheadFreeze()
+     {
+         CancelFrameStepPlayBlip(); // a pause supersedes a one-frame play blip too
++        if (IsPlayheadSourceAudioOnly() && _playheadValid && !_playheadSeekTarget.HasValue)
++        {
++            _audioPauseCursorSeconds = _playheadEstimateSeconds;
++        }
+         _pauseRequested = true;
+         _playStartGate.PauseRequested(); // a pause supersedes any play still waiting to be observed
+-        _playheadPausedSettled = false; // reconcile the cursor to mpv's final frame once this pause settles
++        _playheadPausedSettled = false; // video follows its final frame; audio holds its displayed pause point
+         _playheadPauseSettleTs = Stopwatch.GetTimestamp();
+     }
+ 
+@@ -2855,6 +2865,14 @@ public partial class MainViewModel :
+         _vlcReloader.SmpteMode = IsSmpteTimingEnabled;
+ 
+         _formatChangedByUser = false;
++        DisposeAuditionWorkflow();
++        SetSynchronousAudioState(null);
++        _synchronousAudioDirectory = null;
++        _originalTimelinePreview = false;
++        _editedTimelineReturn = null;
++        _revisionFingerprint = null;
++        _lastRevisionDirectory = null;
++        ClearSynchronousAudioSelection();
+         _undoRedoManager.Reset();
+         _shortcutManager.ClearKeys();
+ 
+@@ -4074,6 +4092,12 @@ public partial class MainViewModel :
+                 return;
+             }
+ 
++            if (await TryRestoreRecentAudioSessionAsync(recentFile.SubtitleFileName, recentFile.VideoFileName))
++            {
++                _shortcutManager.ClearKeys();
++                return;
++            }
++
+             // Reopen with the encoding the file was last opened with - it is stored on the
+             // recent-file entry for exactly this, but nothing ever read it back, so a file
+             // opened as e.g. Windows-1252 came back auto-detected.
+@@ -15715,6 +15739,7 @@ public partial class MainViewModel :
+     [RelayCommand]
+     private async Task ShowHistory()
+     {
++        if (_synchronousAudioBusy) return;
+         _undoRedoManager.CheckForChanges(null);
+         _undoRedoManager.StopChangeDetection();
+ 
+@@ -15726,6 +15751,12 @@ public partial class MainViewModel :
+             var undoCount = _undoRedoManager.UndoCount;
+             for (var i = 0; i < undoCount; i++)
+             {
++                if (_synchronousAudioState != null)
++                {
++                    if (!await PerformSynchronousAudioHistoryAsync(false)) break;
++                    if (GetUndoRedoHash() == result.SelectedHistoryItem.Hash) { ShowUndoStatus(); break; }
++                    continue;
++                }
+                 var undoItem = _undoRedoManager.Undo();
+                 if (undoItem == null)
+                 {
+@@ -17583,6 +17614,7 @@ public partial class MainViewModel :
+             control!.Position = _fullScreenVideoPlayerControl.PositionForRestore;
+             control!.Volume = _fullScreenVideoPlayerControl.Volume;
+             _fullScreenVideoPlayerControl = null;
++            ReapplyPlaybackSpeed();
+ 
+             // A track switched while fullscreen (toggle-audio-track shortcut) only ever reached the
+             // fullscreen player, so hand it to the player we are going back to - otherwise playback
+@@ -17611,6 +17643,7 @@ public partial class MainViewModel :
+             // over with, and both have to wait for that point:
+             ReapplySelectedAudioTrack(readyPlayer); // the selected audio track (#12844)
+             RefreshSubtitlePreview();               // and the subtitle itself (#13407)
++            ApplyReviewAudioBalance();
+         });
+         fullScreenWindow.Show(Window!);
+         _shortcutManager.ClearKeys();
+@@ -17671,6 +17704,7 @@ public partial class MainViewModel :
+             bindings.Add((name, keys, command));
+         }
+ 
++        AddPlaybackFullScreenBindings(bindings);
+         return bindings;
+     }
+ 
+@@ -17897,7 +17931,7 @@ public partial class MainViewModel :
+             return;
+         }
+ 
+-        var videoPosition = vp.Position;
++        var videoPosition = GetPositionForSubtitleSplitSeconds(vp);
+         if (videoPosition < selectedLine.StartTime.TotalSeconds + 0.3 ||
+             videoPosition > selectedLine.EndTime.TotalSeconds - 0.3)
+         {
+@@ -17918,7 +17952,7 @@ public partial class MainViewModel :
+             return;
+         }
+ 
+-        var pos = vp.Position;
++        var pos = GetPositionForSubtitleSplitSeconds(vp);
+         var subtitlesAtPosition = Subtitles
+             .Where(p =>
+                 !p.IsReferenceOnly && // an overlapping reference row is not a second line to split
+@@ -17932,7 +17966,7 @@ public partial class MainViewModel :
+ 
+         var line = subtitlesAtPosition[0];
+ 
+-        var videoPosition = vp.Position;
++        var videoPosition = pos;
+         if (videoPosition < line.StartTime.TotalSeconds + 0.3 ||
+             videoPosition > line.EndTime.TotalSeconds - 0.3)
+         {
+@@ -17954,13 +17988,19 @@ public partial class MainViewModel :
+     [RelayCommand]
+     private void SplitAtTextBoxCursorPosition()
+     {
++        var focusTargetAfterSplit = GetTextBoxSplitFocusTarget();
++        var subtitleCountBefore = Subtitles.Count;
+         SplitSelectedLine(false, true);
++        RestoreTextBoxSplitFocusAfterSuccessfulSplit(focusTargetAfterSplit, subtitleCountBefore);
+     }
+ 
+     [RelayCommand]
+     private void SplitAtVideoPositionAndTextBoxCursorPosition()
+     {
++        var focusTargetAfterSplit = GetTextBoxSplitFocusTarget();
++        var subtitleCountBefore = Subtitles.Count;
+         SplitSelectedLine(true, true);
++        RestoreTextBoxSplitFocusAfterSuccessfulSplit(focusTargetAfterSplit, subtitleCountBefore);
+     }
+ 
+     [RelayCommand]
+@@ -20650,7 +20690,7 @@ public partial class MainViewModel :
+         // hold focus but is never rewritten, so its caret is ignored.
+         var originalHasFocus = atTextBoxPosition && EditTextBoxOriginal.IsFocused && CanEditOriginal;
+         var textIndex = atTextBoxPosition && !originalHasFocus ? EditTextBox.SelectionStart : -1;
+-        var videoPositionSeconds = atVideoPosition && vp != null ? vp.Position : -1;
++        var videoPositionSeconds = atVideoPosition && vp != null ? GetPositionForSubtitleSplitSeconds(vp) : -1;
+         var originalSplit = GetOriginalSplit(s, language, originalHasFocus ? EditTextBoxOriginal.SelectionStart : -1);
+ 
+         var countBefore = Subtitles.Count;
+@@ -20828,8 +20868,14 @@ public partial class MainViewModel :
+             message => ShowStatus(message));
+     }
+ 
+-    private void PerformUndo()
++    private async void PerformUndo()
+     {
++        if (_synchronousAudioBusy) return;
++        if (_synchronousAudioState != null)
++        {
++            await PerformSynchronousAudioHistoryAsync(false);
++            return;
++        }
+         if (!_undoRedoManager.CanUndo)
+         {
+             return;
+@@ -20878,8 +20924,14 @@ public partial class MainViewModel :
+         }
+     }
+ 
+-    private void PerformRedo()
++    private async void PerformRedo()
+     {
++        if (_synchronousAudioBusy) return;
++        if (_synchronousAudioState != null)
++        {
++            await PerformSynchronousAudioHistoryAsync(true);
++            return;
++        }
+         if (!_undoRedoManager.CanRedo)
+         {
+             return;
+@@ -21019,6 +21071,7 @@ public partial class MainViewModel :
+             IsShowingOriginalNonMatchingLines = IsShowingOriginalNonMatchingLines,
+             IsEditOriginalMode = IsEditOriginalMode,
+             SubtitleOriginalFormat = _subtitleOriginal?.OriginalFormat,
++            SynchronousAudio = CaptureSynchronousAudioState(),
+         };
+     }
+ 
+@@ -21033,6 +21086,8 @@ public partial class MainViewModel :
+         // must not try to "restore" the view in the middle of that (see SelectAndScrollToRow).
+         using var anchorSuspended = SubtitleGrid is { } grid ? TableViewScrollAnchor.GetFor(grid)?.Suspend() : null;
+ 
++        if (undoRedoObject.SynchronousAudio != null)
++            SetSynchronousAudioState(undoRedoObject.SynchronousAudio);
+         ReplaceSubtitles(undoRedoObject.Subtitles);
+ 
+         _subtitleFileName = undoRedoObject.SubtitleFileName;
+@@ -22097,6 +22152,10 @@ public partial class MainViewModel :
+             return;
+         }
+ 
++        var pairedAudio = videoFileName ?? Se.Settings.File.RecentFiles.FirstOrDefault(rf =>
++            string.Equals(rf.SubtitleFileName, fileName, StringComparison.OrdinalIgnoreCase))?.VideoFileName;
++        if (await TryRestoreRecentAudioSessionAsync(fileName, pairedAudio)) return;
++
+         // Drop any image source kept from a previous OCR session; the image-import branches
+         // below re-populate it via the OCR window, while plain text subtitles leave it cleared
+         // so spell check does not show unrelated images (#11719).
+@@ -24398,6 +24457,10 @@ public partial class MainViewModel :
+ 
+     private async Task<bool> SaveSubtitle(bool isAutoSave = false)
+     {
++        // Managed audio sessions keep normal Subtitle Edit save semantics:
++        // Ctrl+S writes the current subtitle file first; the normal save tail then
++        // snapshots the paired audio/subtitle checkpoint via TrySaveAudioCheckpoint().
++        if (BlockDetachedRevisionSave()) return false;
+         if (Subtitles == null || !Subtitles.Any())
+         {
+             if (!isAutoSave)
+@@ -24505,6 +24568,7 @@ public partial class MainViewModel :
+         _lastOpenSaveFormat = SelectedSubtitleFormat;
+ 
+         new SubtitleMarksPersistence(GetUpdateSubtitle(), _subtitleFileName).Save();
++        TrySaveAudioCheckpoint();
+ 
+         return true;
+     }
+@@ -24577,6 +24641,7 @@ public partial class MainViewModel :
+         _lastOpenSaveFormat = SelectedSubtitleFormat;
+ 
+         new SubtitleMarksPersistence(GetUpdateSubtitle(), _subtitleFileName).Save();
++        TrySaveAudioCheckpoint();
+ 
+         return true;
+     }
+@@ -24841,6 +24906,9 @@ public partial class MainViewModel :
+ 
+     private async Task<bool> SaveSubtitleAs()
+     {
++        // Save As remains available in a managed audio session. The selected file is
++        // written normally, then SaveSubtitle() refreshes the paired checkpoint/revision.
++        if (BlockDetachedRevisionSave()) return false;
+         var newFileName = "New";
+         var behavior = Se.Settings.General.SaveAsBehavior;
+ 
+@@ -25174,6 +25242,7 @@ public partial class MainViewModel :
+     internal async void OnClosing(object? sender, WindowClosingEventArgs e)
+     {
+         _videoOpenTokenSource?.Cancel();
++        DisposeAuditionWorkflow();
+         AddToRecentFiles(false);
+ 
+         if (Window != null)
+@@ -25435,7 +25504,7 @@ public partial class MainViewModel :
+         else if (Se.Settings.File.OpenLastFileOnStart)
+         {
+             var first = Se.Settings.File.RecentFiles.FirstOrDefault();
+-            if (first != null && File.Exists(first.SubtitleFileName))
++            if (first != null && (File.Exists(first.SubtitleFileName) || IsManagedRecentAudio(first.VideoFileName)))
+             {
+                 Dispatcher.UIThread.Post(async void () =>
+                 {
+@@ -25463,7 +25532,7 @@ public partial class MainViewModel :
+                         }
+ 
+                         bool skipLoadVideo = false;
+-                        _videoFileName = first.VideoFileName;
++                        if (!IsManagedRecentAudio(first.VideoFileName)) _videoFileName = first.VideoFileName;
+                         await Task.Delay(25);
+ 
+                         if (Se.Settings.General.RememberPositionAndSize)
+@@ -25477,6 +25546,7 @@ public partial class MainViewModel :
+                             InitLayout.RestoreLayoutPositions(Se.Settings.Appearance.CurrentLayoutPositions, ContentGrid.Children.FirstOrDefault() as Grid);
+                         }
+ 
++                        if (await TryRestoreRecentAudioSessionAsync(first.SubtitleFileName, first.VideoFileName)) return;
+                         await SubtitleOpen(first.SubtitleFileName, first.VideoFileName, first.SelectedLine, null, skipLoadVideo, first.AudioTrack);
+                         await SeekVideoToSelectedLineAsync();
+ 
+@@ -25649,8 +25719,15 @@ public partial class MainViewModel :
+     // startPositionSeconds: where the video should already be when it comes up, for callers that
+     // restore a session. Handing it to the player beats seeking afterwards - the video then never
+     // shows 0:00 first and never visibly jumps (issue #13329).
+-    private async Task VideoOpenFile(string videoFileName, int desiredAudioTrackId = -1, double startPositionSeconds = 0) // OpenVideoFile
+-    {
++    private async Task VideoOpenFile(string videoFileName, int desiredAudioTrackId = -1, double startPositionSeconds = 0, bool forceWaveform = false) // OpenVideoFile
++    {
++        _audioPauseCursorSeconds = null;
++        OnAuditionMediaOpening(videoFileName);
++        if (!_synchronousAudioBusy && !string.Equals(videoFileName, _videoFileName, StringComparison.OrdinalIgnoreCase))
++            ClearSynchronousAudioSelection();
++        if (!_synchronousAudioBusy && _synchronousAudioState != null &&
++            !string.Equals(videoFileName, _synchronousAudioState.FileName, StringComparison.OrdinalIgnoreCase))
++            EndSynchronousAudioSession();
+         var vp = GetVideoPlayerControl();
+         if (vp == null)
+         {
+@@ -25729,7 +25806,7 @@ public partial class MainViewModel :
+             }
+         }
+ 
+-        if (vp.VideoPlayer != null && vp.VideoPlayer.Duration > 0)
++        if (!_synchronousAudioBusy && vp.VideoPlayer != null && vp.VideoPlayer.Duration > 0)
+         {
+             AddToRecentVideoFiles(videoFileName);
+         }
+@@ -25738,7 +25815,11 @@ public partial class MainViewModel :
+         // reloads the same video/audio even if the app is force-quit before OnClosing runs.
+         // Guarded by a known subtitle name so opening media without a subtitle doesn't create
+         // a blank recent entry. AddToRecentFiles itself no-ops while still loading.
+-        if (!string.IsNullOrEmpty(_subtitleFileName))
++        if (_synchronousAudioBusy)
++        {
++            // A paired edit is not a durable media association until its subtitle commit succeeds.
++        }
++        else if (!string.IsNullOrEmpty(_subtitleFileName))
+         {
+             AddToRecentFiles(false);
+         }
+@@ -25749,7 +25830,7 @@ public partial class MainViewModel :
+ 
+         var _ = Task.Run(() =>
+         {
+-            Dispatcher.UIThread.Post(() => LoadWaveformAndSpectrogram(videoFileName));
++            Dispatcher.UIThread.Post(() => LoadWaveformAndSpectrogram(videoFileName, forceWaveform));
+             GetMediaInformation(videoFileName);
+             LoadAudioTrackMenuItems();
+         });
+@@ -25778,7 +25859,7 @@ public partial class MainViewModel :
+         UpdateRecentVideoMenus();
+     }
+ 
+-    private void LoadWaveformAndSpectrogram(string videoFileName)
++    private void LoadWaveformAndSpectrogram(string videoFileName, bool forceRegenerate = false)
+     {
+         var trackNumber = _audioTrack?.FfIndex ?? -1;
+         var peakWaveFileName = WavePeakGenerator2.GetPeakWaveFileName(videoFileName, trackNumber);
+@@ -25793,7 +25874,7 @@ public partial class MainViewModel :
+         // WaveformAutoGenerate gates whether we auto-extract (on video open and on audio-track
+         // switch, #13665); cached peaks still load via the branch below either way. When it is
+         // off, the click-to-generate hint lets the user start extraction explicitly.
+-        if (needToGenerate && Se.Settings.Waveform.WaveformAutoGenerate)
++        if (forceRegenerate || (needToGenerate && Se.Settings.Waveform.WaveformAutoGenerate))
+         {
+             StartWaveformExtraction(videoFileName, trackNumber, peakWaveFileName, spectrogramFileName);
+         }
+@@ -26786,6 +26867,7 @@ public partial class MainViewModel :
+     /// </summary>
+     public bool IsUserEditing()
+     {
++        if (_synchronousAudioBusy) return true;
+         if (_lastKeyPressedMs != 0 && Environment.TickCount64 - _lastKeyPressedMs < 500)
+         {
+             return true;
+@@ -26822,6 +26904,7 @@ public partial class MainViewModel :
+         {
+             var hash = 17;
+             hash = hash * 23 + (_subtitleFileName?.GetHashCode() ?? 0);
++            hash = hash * 23 + (string.IsNullOrEmpty(_synchronousAudioState?.RevisionId) ? 0 : _synchronousAudioState.RevisionId.GetHashCode());
+             hash = hash * 23 + (_subtitleFileNameOriginal?.GetHashCode() ?? 0);
+             hash = hash * 23 + (SelectedEncoding.DisplayName?.GetHashCode() ?? 0);
+             hash = hash * 23 + (_subtitle.Header is { } header ? string.GetHashCode(header.AsSpan().Trim()) : 0);
+@@ -28963,6 +29046,7 @@ public partial class MainViewModel :
+     {
+         lock (_onKeyDownHandlerLock)
+         {
++            if (TryHandleSynchronousAudioDelete(keyEventArgs)) return;
+             AudioVisualizer?.SetKeyModifiers(keyEventArgs);
+             var ms = Environment.TickCount64;
+             var msDiff = ms - _lastKeyPressedMs;
+@@ -30164,16 +30248,57 @@ public partial class MainViewModel :
+         }
+     }
+ 
++    private double GetCurrentPlayerPositionSeconds(VideoPlayerControl vp)
++    {
++        var seconds = vp.VideoPlayer.Position;
++        return IsSmpteTimingEnabled ? seconds * 1000.0 / 1001.0 : seconds;
++    }
++
++    private double GetPositionForSubtitleSplitSeconds(VideoPlayerControl vp)
++    {
++        // A direct waveform click is authoritative while mpv applies its asynchronous seek.
++        if (_playheadSeekTarget is { } seekTarget) return seekTarget;
++
++        // While audio is paused, the visible cursor is the point the user chose. mpv's raw
++        // position can lag it; splitting at that older clock recreates the visible offset.
++        if (IsPlayheadSourceAudioOnly() && _playheadValid &&
++            (_audioPauseCursorSeconds.HasValue || _pauseRequested || !vp.IsPlaying))
++        {
++            return _audioPauseCursorSeconds ?? _playheadEstimateSeconds;
++        }
++
++        return GetCurrentPlayerPositionSeconds(vp);
++    }
++
++    private bool HasPlaySelectionReachedEnd(VideoPlayerControl vp) =>
++        _playSelectionItem != null && !_playheadSeekTarget.HasValue &&
++        GetCurrentPlayerPositionSeconds(vp) >= _playSelectionItem.EndSeconds;
++
++    private SubtitleLineViewModel? AdvancePlaySelection(VideoPlayerControl vp)
++    {
++        var selection = _playSelectionItem;
++        if (selection == null) return null;
++
++        var playerSeconds = GetCurrentPlayerPositionSeconds(vp);
++        // A late 50 ms tick at 2x may already be beyond a short next line. Choose the
++        // next line from the current boundary, then replay it if the player passed its end.
++        var next = selection.GetNextSubtitle(Math.Min(playerSeconds, selection.EndSeconds));
++        if (next != null && (selection.HasGapOrIsFirst() || playerSeconds >= next.EndTime.TotalSeconds))
++        {
++            vp.SeekTo(next.StartTime.TotalSeconds);
++            PinPlayheadTo(next.StartTime.TotalSeconds);
++        }
++
++        return next;
++    }
++
+     private double UpdatePlayheadEstimate(VideoPlayerControl vp, bool isPlaying)
+     {
+         // isPlaying is read once by the caller and passed in: every IsPlaying get is a
+         // synchronous P/Invoke into the mpv core, and this method used to ask up to four
+         // times per 16 ms cursor tick.
+-        var rawPosition = vp.VideoPlayer.Position;
+-        if (IsSmpteTimingEnabled)
+-        {
+-            rawPosition = rawPosition * 1000.0 / 1001.0;
+-        }
++        var rawPosition = GetCurrentPlayerPositionSeconds(vp);
++        var audioOnly = IsPlayheadSourceAudioOnly();
+ 
+         var nowTimestamp = Stopwatch.GetTimestamp();
+ 
+@@ -30248,8 +30373,9 @@ public partial class MainViewModel :
+             // onto a stale position); the position must be at the target too.
+             var pinElapsedMs = (nowTimestamp - _playheadSeekTargetTs) * 1000.0 / Stopwatch.Frequency;
+             var player = vp.VideoPlayer;
+-            var seekStillInFlight = player.SupportsPlaybackRestartEvents &&
+-                                    !player.HasPlaybackRestartedSince(_playheadSeekTargetTs);
++            var restartArrived = player.SupportsPlaybackRestartEvents &&
++                                 player.HasPlaybackRestartedSince(_playheadSeekTargetTs);
++            var seekStillInFlight = player.SupportsPlaybackRestartEvents && !restartArrived;
+             var timedOut = pinElapsedMs > PlayheadSeekPinTimeoutMs &&
+                            (!seekStillInFlight || pinElapsedMs > PlayheadSeekPinMaxMs);
+ 
+@@ -30271,7 +30397,7 @@ public partial class MainViewModel :
+             // lands). Hold the pin until mpv has actually paused - that is the whole point of pinning on a
+             // pause path (see PinPlayheadTo / RequestPausePlayheadFreeze). The pin timeout still bounds it.
+             var pausePending = isPlaying && _pauseRequested;
+-            if ((!arrived || pausePending) && !timedOut)
++            if (((!arrived && !restartArrived) || pausePending) && !timedOut)
+             {
+                 _playheadLastRealSeconds = rawPosition;
+                 _playheadLastTimestamp = nowTimestamp;
+@@ -30300,6 +30426,49 @@ public partial class MainViewModel :
+             return _playheadEstimateSeconds;
+         }
+ 
++        if (audioOnly && !_audioPauseCursorSeconds.HasValue && !isPlaying &&
++            _playheadWasPlaying && _playheadValid && !frameStepping)
++        {
++            // The player can pause without routing through RequestPausePlayheadFreeze.
++            _audioPauseCursorSeconds = _playheadEstimateSeconds;
++            _playheadPauseSettleTs = nowTimestamp;
++            _playheadPausedSettled = false;
++        }
++
++        if (audioOnly && _audioPauseCursorSeconds is { } pausedCursor &&
++            (_pauseRequested || !isPlaying) && !frameStepping)
++        {
++            if (!isPlaying && _playheadWasPlaying)
++            {
++                _playheadPauseSettleTs = nowTimestamp;
++                _playheadPausedSettled = false;
++            }
++
++            var rawChangedWhilePaused = Math.Abs(rawPosition - _playheadLastRealSeconds) > 0.0005;
++            if (rawChangedWhilePaused) _playheadLastRawChangeTs = nowTimestamp;
++            var pauseMs = (nowTimestamp - _playheadPauseSettleTs) * 1000.0 / Stopwatch.Frequency;
++            var rawStableMs = (nowTimestamp - _playheadLastRawChangeTs) * 1000.0 / Stopwatch.Frequency;
++            if (_playheadPausedSettled && rawChangedWhilePaused && !_pauseRequested)
++            {
++                // An unpinned seek after the pause settled supersedes its frozen cursor.
++                _audioPauseCursorSeconds = null;
++            }
++            else
++            {
++                _playheadEstimateSeconds = pausedCursor;
++                if (!isPlaying)
++                {
++                    _pauseRequested = false;
++                    if (pauseMs >= PlayheadPauseSettleMs && rawStableMs >= PlayheadPausedSettleStableMs)
++                        _playheadPausedSettled = true;
++                }
++                _playheadLastRealSeconds = rawPosition;
++                _playheadLastTimestamp = nowTimestamp;
++                _playheadWasPlaying = isPlaying;
++                return pausedCursor;
++            }
++        }
++
+         if (isPlaying && !_pauseRequested && _playheadValid && _playheadLastRealSeconds >= 0)
+         {
+             var elapsedSeconds = (nowTimestamp - _playheadLastTimestamp) / (double)Stopwatch.Frequency;
+@@ -30416,11 +30585,8 @@ public partial class MainViewModel :
+             // (before mpv's IsPlaying flips ~100 ms later) so the cursor stops on the keypress instead
+             // of gliding on (#12033 follow-up). mpv then keeps decoding for ~100-200 ms and its reported
+             // position settles a little past (or, if we'd extrapolated ahead, behind) the frozen spot.
+-            // We hold the cursor dead-frozen at the keypress instant and do NOT reconcile that small
+-            // residual: the video frame stopped where the cursor is, and any later move toward mpv's
+-            // settled frame - whether eased or snapped in one step - reads as the cursor drifting a
+-            // moment after the numeric time display has already stopped (#12740). Only a real
+-            // discontinuity (a seek while paused, beyond the resync threshold) moves the cursor now.
++            // Keep video on its frozen frame (#12740). Audio paused through the normal path
++            // holds its visible cursor in the branch above, including during mpv's wind-down.
+             if (!isPlaying)
+             {
+                 if (_playheadWasPlaying && !frameStepping)
+@@ -30503,6 +30669,19 @@ public partial class MainViewModel :
+         return _playheadEstimateSeconds;
+     }
+ 
++    private bool IsPlayheadSourceAudioOnly()
++    {
++        if (!string.Equals(_playheadSourceFileName, _videoFileName, StringComparison.Ordinal))
++        {
++            _playheadSourceFileName = _videoFileName;
++            var extension = Path.GetExtension(_videoFileName);
++            _playheadSourceIsAudioOnly = Array.Exists(Utilities.AudioFileExtensions,
++                value => string.Equals(value, extension, StringComparison.OrdinalIgnoreCase));
++        }
++
++        return _playheadSourceIsAudioOnly;
++    }
++
+     /// <summary>
+     /// Called just before a native mpv frame step (`frame-step` / `frame-back-step`): opens a short
+     /// window in which the playhead estimate treats the core as paused and stays authoritative, so
+@@ -30522,6 +30701,7 @@ public partial class MainViewModel :
+     private void PinPlayheadTo(double targetSeconds)
+     {
+         CancelFrameStepPlayBlip(); // any other seek moves the cursor off the stepped-to frame
++        _audioPauseCursorSeconds = null;
+         _playheadSeekTarget = targetSeconds;
+         _playheadSeekTargetTs = Stopwatch.GetTimestamp();
+         _playheadEstimateSeconds = targetSeconds;
+@@ -30684,9 +30864,9 @@ public partial class MainViewModel :
+ 
+                     _playStartGate.PlayingObserved();
+ 
+-                    if (_playSelectionItem != null && mediaPlayerSeconds >= _playSelectionItem.EndSeconds)
++                    if (HasPlaySelectionReachedEnd(vp))
+                     {
+-                        var p = _playSelectionItem.GetNextSubtitle(mediaPlayerSeconds);
++                        var p = AdvancePlaySelection(vp);
+                         if (p == null)
+                         {
+                             PauseVideoAndFreezePlayhead(vp);
+@@ -30697,8 +30877,9 @@ public partial class MainViewModel :
+                             // line that was just played (#13429).
+                             var fps = Se.Settings.General.CurrentFrameRate;
+                             var frameSeconds = fps >= 10 ? 1.0 / fps : 0.04;
+-                            var stopSeconds = Math.Max(_playSelectionItem.GetCurrentStartSeconds(),
+-                                _playSelectionItem.EndSeconds - frameSeconds);
++                            var selection = _playSelectionItem!;
++                            var stopSeconds = Math.Max(selection.GetCurrentStartSeconds(),
++                                selection.EndSeconds - frameSeconds);
+ 
+                             vp.Position = stopSeconds;
+                             PinPlayheadTo(stopSeconds);
+@@ -30711,19 +30892,6 @@ public partial class MainViewModel :
+                         }
+                         else
+                         {
+-                            if (_playSelectionItem.HasGapOrIsFirst())
+-                            {
+-                                // Pin like every other seek: a loop wrap seeks backwards while mpv keeps
+-                                // reporting the old position for ~100-200 ms, so an unpinned cursor
+-                                // extrapolates past the selection end and then snaps back late (or, for a
+-                                // selection shorter than the resync threshold, never snaps back at all).
+-                                // The stale estimate could also re-trigger this end check on the next tick
+-                                // and skip right past the line just wrapped to. SeekTo, not Position: the
+-                                // styled property drops an assignment equal to the held value.
+-                                vp.SeekTo(p.StartTime.TotalSeconds);
+-                                PinPlayheadTo(p.StartTime.TotalSeconds);
+-                            }
+-
+                             Dispatcher.UIThread.Post(() => { SubtitleGrid.ScrollIntoView(p); });
+                         }
+                     }
+@@ -30902,6 +31070,7 @@ public partial class MainViewModel :
+             UpdateTitleStatus(mainHash, originalHash);
+             UpdateGaps();
+             AutoSaveTick(mainHash, originalHash);
++            AudioRevisionTick();
+ 
+             if (_subtitleMarksDirty)
+             {
+@@ -31005,6 +31174,16 @@ public partial class MainViewModel :
+             return;
+         }
+ 
++        // An MP3/WAV has no video surface on which subtitles can be previewed. Building a full
++        // Subtitle snapshot here used to run before the first playhead update and could postpone
++        // the first visible cursor frame on long files, despite audio already playing normally.
++        // Clear the work item; opening a real video marks it dirty again through VideoOpenFile.
++        if (IsPlayheadSourceAudioOnly())
++        {
++            _mpvPreviewDirty = false;
++            return;
++        }
++
+         // Filter once instead of: Where().ToList() + Clear + AddRange (which
+         // allocates an extra List and walks the paragraphs three times).
+         // Verified with BenchmarkDotNet at ~1.7-2x faster and 0-45 % less
+@@ -31722,7 +31901,8 @@ public partial class MainViewModel :
+     /// that never go through <see cref="PinPlayheadTo"/>. An armed "one frame with play" blip
+     /// would survive such a seek and, when it ends a moment later, pause the video and yank it
+     /// back to the blip's anchor frame - swallowing the navigation. The blip's playback is
+-    /// transient, so stop it and let the seek win.
++    /// transient, so stop it and let the seek win. Pin the playhead as well, so a paused
++    /// cursor and its resume anchor follow these deliberate seeks.
+     /// </summary>
+     internal void OnVideoPlayerPositionSet(double newPositionSeconds)
+     {
+@@ -31735,6 +31915,7 @@ public partial class MainViewModel :
+         }
+ 
+         CancelFrameStepPlayBlip();
++        PinPlayheadTo(newPositionSeconds);
+     }
+ 
+     internal void OnVideoPlayerUserSeeked(double newPositionSeconds)
+@@ -31789,15 +31970,14 @@ public partial class MainViewModel :
+             var seconds = selectedItem.StartTime.TotalSeconds;
+             if (Se.Settings.General.SubtitleDoubleClickAction == SubtitleDoubleClickActionType.GoToSubtitleOnly.ToString())
+             {
+-                vp.Position = seconds;
++                SeekToSubtitleFromGrid(vp, seconds);
+                 AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+                 return;
+             }
+ 
+             if (Se.Settings.General.SubtitleDoubleClickAction == SubtitleDoubleClickActionType.GoToSubtitleAndPlay.ToString())
+             {
+-                vp.Position = seconds;
+-                PinPlayheadTo(seconds);
++                SeekToSubtitleFromGrid(vp, seconds);
+                 PlayVideo(vp);
+                 AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+                 return;
+@@ -31806,7 +31986,7 @@ public partial class MainViewModel :
+             if (Se.Settings.General.SubtitleDoubleClickAction == SubtitleDoubleClickActionType.GoToSubtitleAndPauseAndFocusTextBox.ToString())
+             {
+                 PauseVideoAndFreezePlayhead(vp);
+-                vp.Position = seconds;
++                SeekToSubtitleFromGrid(vp, seconds);
+                 AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+                 FocusEditTextBox();
+                 return;
+@@ -31814,8 +31994,7 @@ public partial class MainViewModel :
+ 
+             if (Se.Settings.General.SubtitleDoubleClickAction == SubtitleDoubleClickActionType.GoToSubtitleAndPlayAndFocusTextBox.ToString())
+             {
+-                vp.Position = seconds;
+-                PinPlayheadTo(seconds);
++                SeekToSubtitleFromGrid(vp, seconds);
+                 PlayVideo(vp);
+                 AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+                 FocusEditTextBox();
+@@ -31833,7 +32012,7 @@ public partial class MainViewModel :
+             {
+                 seconds = Math.Max(0, seconds - 1.0);
+                 PauseVideoAndFreezePlayhead(vp);
+-                vp.Position = seconds;
++                SeekToSubtitleFromGrid(vp, seconds);
+                 AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+                 return;
+             }
+@@ -31842,7 +32021,7 @@ public partial class MainViewModel :
+             {
+                 seconds = Math.Max(0, seconds - 0.5);
+                 PauseVideoAndFreezePlayhead(vp);
+-                vp.Position = seconds;
++                SeekToSubtitleFromGrid(vp, seconds);
+                 AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+                 return;
+             }
+@@ -31850,8 +32029,7 @@ public partial class MainViewModel :
+             if (Se.Settings.General.SubtitleDoubleClickAction == SubtitleDoubleClickActionType.GoToSubtitleMinus1SecAndPlay.ToString())
+             {
+                 seconds = Math.Max(0, seconds - 1.0);
+-                vp.Position = seconds;
+-                PinPlayheadTo(seconds);
++                SeekToSubtitleFromGrid(vp, seconds);
+                 PlayVideo(vp);
+                 AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+                 return;
+@@ -31859,11 +32037,19 @@ public partial class MainViewModel :
+ 
+             // SubtitleDoubleClickActionType.GoToSubtitleAndPause
+             PauseVideoAndFreezePlayhead(vp);
+-            vp.Position = seconds;
++            SeekToSubtitleFromGrid(vp, seconds);
+             AudioVisualizerCenterOnPositionIfNeeded(selectedItem, seconds);
+         }
+     }
+ 
++    private void SeekToSubtitleFromGrid(VideoPlayerControl vp, double seconds)
++    {
++        // A paused audio cursor may still be frozen at the previous subtitle. Make this
++        // deliberate grid seek authoritative before a Play action can resume that old spot.
++        vp.SeekTo(seconds);
++        PinPlayheadTo(seconds);
++    }
++
+     private void AudioVisualizerCenterOnPositionIfNeeded(SubtitleLineViewModel selectedItem, double seconds)
+     {
+         if (AudioVisualizer != null)
+@@ -32336,6 +32522,9 @@ public partial class MainViewModel :
+         MenuItemAudioVisualizerCopy.IsVisible = false;
+         MenuItemAudioVisualizerCopyText.IsVisible = false;
+ 
++        // An audio range is never an insertion/paste target for a new subtitle.
++        if (AudioVisualizer?.IsAudioRangeSelectionMode == true) return;
++
+         if (e.NewParagraph != null)
+         {
+             MenuItemAudioVisualizerInsertNewSelection.IsVisible = true;
+diff --git a/src/ui/Features/Shared/Undocked/VideoPlayerUndockedViewModel.cs b/src/ui/Features/Shared/Undocked/VideoPlayerUndockedViewModel.cs
+index d6ea969e7c33783e64bf3039b55887866c52b019..934ff5d1aa7c07b2dd90b1e0f1322babdfdb2475 100644
+--- a/src/ui/Features/Shared/Undocked/VideoPlayerUndockedViewModel.cs
++++ b/src/ui/Features/Shared/Undocked/VideoPlayerUndockedViewModel.cs
+@@ -215,6 +215,7 @@ public partial class VideoPlayerUndockedViewModel : ObservableObject
+                 // Undocking opens the video in a new player, which starts on mpv's default audio
+                 // track - re-apply the track the user picked in the main window (issue #12844).
+                 MainViewModel?.ReapplySelectedAudioTrack(videoPlayerControl);
++                MainViewModel?.ReapplyPersonalPlaybackControls();
+             });
+         }
+ 
+diff --git a/src/ui/Logic/UndoRedo/IUndoRedoManager.cs b/src/ui/Logic/UndoRedo/IUndoRedoManager.cs
+index 2f5ec2a9110b33cdae32fc323f4e75acac1f59b8..b8281303ad5c1b97bb1eda52834c8eda2caaf6ef 100644
+--- a/src/ui/Logic/UndoRedo/IUndoRedoManager.cs
++++ b/src/ui/Logic/UndoRedo/IUndoRedoManager.cs
+@@ -9,6 +9,14 @@ public interface IUndoRedoManager : IDisposable
+     IReadOnlyList<UndoRedoItem> RedoList { get; }
+ 
+     void Do(UndoRedoItem action);
++    /// <summary>Returns a cloned undo target without changing either stack. Not a reservation across awaits.</summary>
++    UndoRedoItem? PeekUndo();
++    /// <summary>Returns a cloned redo target without changing either stack. Not a reservation across awaits.</summary>
++    UndoRedoItem? PeekRedo();
++    /// <summary>Copies both stacks without snapshotting or modifying the live client.</summary>
++    UndoRedoCheckpoint CaptureCheckpoint();
++    /// <summary>Restores both stacks. Caller must exclude concurrent edits and restore the live state separately.</summary>
++    void RestoreCheckpoint(UndoRedoCheckpoint checkpoint);
+     UndoRedoItem? Undo();
+     UndoRedoItem? Redo();
+ 
+@@ -17,10 +25,12 @@ public interface IUndoRedoManager : IDisposable
+ 
+     int UndoCount { get; }
+     int RedoCount { get; }
++    /// <summary>The last state already captured by change detection, without re-hashing the live subtitle.</summary>
++    int? LatestUndoHash { get; }
+ 
+     void StartChangeDetection();
+     void StopChangeDetection();
+     void SetupChangeDetection(IUndoRedoClient hashProvider, TimeSpan? interval = null);
+     void CheckForChanges(object? state);
+     void Reset();
+-}
+\ No newline at end of file
++}
+diff --git a/src/ui/Logic/UndoRedo/UndoRedoItem.cs b/src/ui/Logic/UndoRedo/UndoRedoItem.cs
+index 398bbb102033c89df609ce552db50d01f299b757..568f30c92e90a1366ecf59b8f8c66c988b4fb1f8 100644
+--- a/src/ui/Logic/UndoRedo/UndoRedoItem.cs
++++ b/src/ui/Logic/UndoRedo/UndoRedoItem.cs
+@@ -1,4 +1,4 @@
+-﻿using Nikse.SubtitleEdit.Core.SubtitleFormats;
++using Nikse.SubtitleEdit.Core.SubtitleFormats;
+ using Nikse.SubtitleEdit.Features.Main;
+ using System;
+ using System.Linq;
+@@ -36,6 +36,7 @@ public class UndoRedoItem
+     public int SelectionLength { get; set; }
+     public DateTime Created { get; set; }
+     public int Hash { get; set; }
++    public SynchronousAudioState? SynchronousAudio { get; set; }
+ 
+     public UndoRedoItem(
+         string description,
+@@ -68,7 +69,7 @@ public class UndoRedoItem
+             item.Subtitles.Select(p => new SubtitleLineViewModel(p, false)).ToArray(),
+             item.Hash,
+             item.SubtitleFileName,
+-            item.SelectedLines,
++            item.SelectedLines.ToArray(),
+             item.CaretIndex,
+             item.SelectionLength)
+         {
+@@ -84,6 +85,7 @@ public class UndoRedoItem
+             IsShowingOriginalNonMatchingLines = item.IsShowingOriginalNonMatchingLines,
+             IsEditOriginalMode = item.IsEditOriginalMode,
+             SubtitleOriginalFormat = item.SubtitleOriginalFormat,
++            SynchronousAudio = item.SynchronousAudio,
+             // Preserve the original timestamp — every Clone() used to overwrite
+             // Created with DateTime.Now via the constructor, so any UI that
+             // displays Created (or any logic that relies on the chronological
+diff --git a/src/ui/Logic/UndoRedo/UndoRedoManager.cs b/src/ui/Logic/UndoRedo/UndoRedoManager.cs
+index 9ab6a76757cb4c9422e577892a0dd5a425a5b8d7..bb8e8b456e39faba664409c64864970be7782306 100644
+--- a/src/ui/Logic/UndoRedo/UndoRedoManager.cs
++++ b/src/ui/Logic/UndoRedo/UndoRedoManager.cs
+@@ -34,6 +34,9 @@ public sealed class UndoRedoManager : IUndoRedoManager
+     // inject hundreds of threads — issue #12683. Interlocked so overlapping ticks
+     // return immediately instead of queueing.
+     private int _checkForChangesInProgress;
++    // Invalidates snapshots captured by a timer tick before a stop/reset/rollback.
++    // Read and written only under _lock.
++    private long _changeDetectionGeneration;
+     // Narrowed from 1s to reduce the window in which two distinct user actions
+     // (e.g. text edit + waveform drag) get bundled into a single undo entry —
+     // issue #11280. CheckForChanges is gated by IsUserEditing() and IsAlreadyTracked()
+@@ -94,6 +97,11 @@ public sealed class UndoRedoManager : IUndoRedoManager
+         get { lock (_lock) { return _redoList.Count; } }
+     }
+ 
++    public int? LatestUndoHash
++    {
++        get { lock (_lock) { return _undoList.Count == 0 ? null : _undoList[^1].Hash; } }
++    }
++
+     // -------------------------------------------------------------------------
+     // Change-detection setup
+     // -------------------------------------------------------------------------
+@@ -139,6 +147,7 @@ public sealed class UndoRedoManager : IUndoRedoManager
+     {
+         lock (_lock)
+         {
++            _changeDetectionGeneration++;
+             if (!_isChangeDetectionActive)
+             {
+                 return;
+@@ -170,6 +179,67 @@ public sealed class UndoRedoManager : IUndoRedoManager
+         }
+     }
+ 
++    /// <summary>
++    /// Selects exactly the target Undo would return for the current live hash, without
++    /// recording untracked changes or moving entries. Callers must guard their context
++    /// and revalidate after asynchronous preflight; a peek does not reserve the stack.
++    /// </summary>
++    public UndoRedoItem? PeekUndo()
++    {
++        // As in Undo, never invoke a UI-thread client while holding the manager lock.
++        var currentHash = _undoRedoClient?.GetFastHash() ?? 0;
++        lock (_lock)
++        {
++            if (_undoList.Count == 0)
++            {
++                return null;
++            }
++
++            if (_undoList[^1].Hash == currentHash)
++            {
++                return _undoList.Count > 1 ? UndoRedoItem.Clone(_undoList[^2]) : null;
++            }
++
++            return UndoRedoItem.Clone(_undoList[^1]);
++        }
++    }
++
++    public UndoRedoItem? PeekRedo()
++    {
++        lock (_lock)
++        {
++            return _redoList.Count > 0 ? UndoRedoItem.Clone(_redoList[^1]) : null;
++        }
++    }
++
++    public UndoRedoCheckpoint CaptureCheckpoint()
++    {
++        lock (_lock)
++        {
++            return new UndoRedoCheckpoint(this, [.. _undoList], [.. _redoList]);
++        }
++    }
++
++    public void RestoreCheckpoint(UndoRedoCheckpoint checkpoint)
++    {
++        ArgumentNullException.ThrowIfNull(checkpoint);
++        if (!ReferenceEquals(checkpoint.Owner, this))
++        {
++            throw new ArgumentException("Checkpoint belongs to another undo manager.", nameof(checkpoint));
++        }
++
++        // Clone before mutation: a failed copy must not erase the current stacks.
++        var (undo, redo) = checkpoint.CopyStacks();
++        lock (_lock)
++        {
++            _changeDetectionGeneration++;
++            _undoList.Clear();
++            _undoList.AddRange(undo);
++            _redoList.Clear();
++            _redoList.AddRange(redo);
++        }
++    }
++
+     public UndoRedoItem? Undo()
+     {
+         // Capture the client + read the live hash outside the lock — see the
+@@ -275,6 +345,16 @@ public sealed class UndoRedoManager : IUndoRedoManager
+ 
+         try
+         {
++            long detectionGeneration;
++            lock (_lock)
++            {
++                if (!_isChangeDetectionActive)
++                {
++                    return;
++                }
++                detectionGeneration = _changeDetectionGeneration;
++            }
++
+             // Both GetFastHash and MakeUndoRedoObject enumerate the subtitle
+             // collection; calling them under _lock would invert lock order with
+             // anything on the UI thread that holds a collection lock and is
+@@ -308,6 +388,13 @@ public sealed class UndoRedoManager : IUndoRedoManager
+ 
+             lock (_lock)
+             {
++                // StopChangeDetection does not wait for an already-running callback.
++                // Never append its stale snapshot after an async transaction or rollback.
++                if (!_isChangeDetectionActive || detectionGeneration != _changeDetectionGeneration)
++                {
++                    return;
++                }
++
+                 // Re-validate after the lock release/reacquire window — another
+                 // tick or an explicit Do() may have captured this hash already.
+                 if (IsAlreadyTracked(snapshot.Hash))
+@@ -349,6 +436,17 @@ public sealed class UndoRedoManager : IUndoRedoManager
+ 
+     private static bool HasChanges(UndoRedoItem prev, UndoRedoItem next)
+     {
++        // A cut can affect audio only (e.g. trailing silence). The hash then changes
++        // even when every subtitle row is identical. Seeking alone is not an edit.
++        if (prev.SynchronousAudio?.FileName != next.SynchronousAudio?.FileName ||
++            prev.SynchronousAudio?.Sha256 != next.SynchronousAudio?.Sha256 ||
++            prev.SynchronousAudio?.RevisionId != next.SynchronousAudio?.RevisionId ||
++            prev.SynchronousAudio?.SessionId != next.SynchronousAudio?.SessionId)
++        {
++            next.Description = "Synchronous audio changed";
++            return true;
++        }
++
+         var oldCount = prev.Subtitles.Length;
+         var newCount = next.Subtitles.Length;
+ 
+@@ -504,6 +602,7 @@ public sealed class UndoRedoManager : IUndoRedoManager
+         bool wasActive;
+         lock (_lock)
+         {
++            _changeDetectionGeneration++;
+             wasActive = _isChangeDetectionActive;
+             if (wasActive)
+             {
+@@ -555,4 +654,4 @@ public sealed class UndoRedoManager : IUndoRedoManager
+         list.RemoveAt(list.Count - 1);
+         return item;
+     }
+-}
+\ No newline at end of file
++}
+diff --git a/src/ui/Logic/VideoPlayers/LibMpvDynamic/LibMpvDynamicPlayer.cs b/src/ui/Logic/VideoPlayers/LibMpvDynamic/LibMpvDynamicPlayer.cs
+index 6bd68a60348992eb67584a4c1f3fea167610e1c7..a9a32f81db515f896c5bf4939e87ed6396a12121 100644
+--- a/src/ui/Logic/VideoPlayers/LibMpvDynamic/LibMpvDynamicPlayer.cs
++++ b/src/ui/Logic/VideoPlayers/LibMpvDynamic/LibMpvDynamicPlayer.cs
+@@ -2490,6 +2490,46 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
+         }
+     }
+ 
++    /// <summary>
++    /// Listening-only dynamics. The labeled filter is the only entry this method removes;
++    /// waveform generation, source media and export never pass through this player filter.
++    /// </summary>
++    public bool SetReviewAudioBalance(bool enabled, string strength)
++    {
++        if (_mpv == IntPtr.Zero || !_coreInitialized)
++        {
++            return false;
++        }
++
++        var graph = enabled ? ReviewAudioBalanceFilter(strength) : null;
++        var removed = DoMpvCommand("af", "remove", "@subtitleReviewBalance");
++        if (removed < 0)
++        {
++            Se.LogError(new InvalidOperationException(GetErrorString(removed)), "Remove review audio balance");
++            return false;
++        }
++        if (graph == null)
++        {
++            return true;
++        }
++
++        var added = DoMpvCommand("af", "add", $"@subtitleReviewBalance:lavfi=[{graph}]");
++        if (added >= 0)
++        {
++            return true;
++        }
++        Se.LogError(new InvalidOperationException(GetErrorString(added)), "Enable review audio balance");
++        return false;
++    }
++
++    public static string ReviewAudioBalanceFilter(string strength) => strength switch
++    {
++        "soft" => "acompressor=threshold=0.12:ratio=2.5:attack=10:release=250:makeup=1.4,dynaudnorm=framelen=150:gausssize=13:maxgain=2.5:targetrms=0.10,alimiter=limit=0.95",
++        "medium" => "acompressor=threshold=0.10:ratio=3.5:attack=10:release=250:makeup=1.7,dynaudnorm=framelen=140:gausssize=13:maxgain=3.5:targetrms=0.11,alimiter=limit=0.95",
++        "strong" => "acompressor=threshold=0.08:ratio=4.5:attack=10:release=250:makeup=1.8,dynaudnorm=framelen=120:gausssize=11:maxgain=4:targetrms=0.12,alimiter=limit=0.95",
++        _ => throw new ArgumentOutOfRangeException(nameof(strength)),
++    };
++
+     public void Stop()
+     {
+         _pausedValue = null;
+@@ -3032,4 +3072,4 @@ public sealed class LibMpvDynamicPlayer : IDisposable, IVideoPlayer
+         }
+     }
+ 
+-}
+\ No newline at end of file
++}
+diff --git a/src/ui/Program.cs b/src/ui/Program.cs
+index a2a3ab96147a9356ef42f1fbf931af14079c886b..1a9f6f54ad7951d79fd7b346733eb335f748ff3c 100644
+--- a/src/ui/Program.cs
++++ b/src/ui/Program.cs
+@@ -61,6 +61,12 @@ namespace Nikse.SubtitleEdit
+ 
+             try
+             {
++                // Personal portable build: direct SubtitleEdit.exe launches perform the
++                // same integrity checks, path rebasing and tool validation as the legacy launcher.
++                PortableStartup.Initialize();
++                if (args.Any(a => a.Equals("--portable-verify-only", StringComparison.OrdinalIgnoreCase)))
++                    return;
++
+                 // Global exception handling
+                 AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+                 {
+diff --git a/src/ui/UI.csproj b/src/ui/UI.csproj
+index 8336ee4b2008f7b5507df743456a1ef5c7bff6e0..4ffd0b2f8ca0af7c7548efc19d8e69549a9527ac 100644
+--- a/src/ui/UI.csproj
++++ b/src/ui/UI.csproj
+@@ -77,8 +77,13 @@
+ 	</ItemGroup>
+ 
+ 	<ItemGroup>
++	  <!-- Personal source plugin: kept outside the replaceable official checkout. -->
++	  <Compile Include="..\..\..\..\integration\ReversibleAudioSync\*.cs" Link="PersonalExtensions\ReversibleAudioSync\%(Filename)%(Extension)" />
++	  <Compile Include="..\..\..\..\integration\SubtitleReview\*.cs" Link="PersonalExtensions\SubtitleReviewIntegration\%(Filename)%(Extension)" />
+ 	  <ProjectReference Include="..\libse\LibSE.csproj" />
+ 	  <ProjectReference Include="..\libuilogic\LibUiLogic.csproj" />
++	  <ProjectReference Include="..\..\..\..\src\AudioWorkflow.Core\AudioWorkflow.Core.csproj" />
++	  <ProjectReference Include="..\..\..\..\src\SubtitleReview.Core\SubtitleReview.Core.csproj" />
+ 	</ItemGroup>
+ 
+ 	<ItemGroup>
+diff --git a/tests/UI/UITests.csproj b/tests/UI/UITests.csproj
+index deff5bf1c08f253ba5c4fe125f842f8b321a9173..8aa6920409c0b2a9859a3796edee550caeef892c 100644
+--- a/tests/UI/UITests.csproj
++++ b/tests/UI/UITests.csproj
+@@ -24,6 +24,7 @@
+   </ItemGroup>
+ 
+   <ItemGroup>
++    <Compile Include="..\..\..\..\tests\UI\*.cs" Link="PersonalExtensions\%(Filename)%(Extension)" />
+     <ProjectReference Include="..\..\src\ui\UI.csproj" />
+   </ItemGroup>
+ 
